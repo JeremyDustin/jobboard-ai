@@ -199,7 +199,7 @@ function AppContent() {
   }
 
   // Membuka formulir tambah lowongan
-  function openAddForm() {
+ function openAddForm() {
     if (!canCreateJobs) return;
 
     setEditingId(null);
@@ -207,6 +207,15 @@ function AppContent() {
     setError("");
     setMessage("");
     setShowForm(true);
+
+    setTimeout(() => {
+      document
+        .getElementById("job-form")
+        ?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+    }, 100);
   }
 
   // Membuka formulir edit lowongan
