@@ -5,9 +5,16 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
-const { initializeApp, cert } = require("firebase-admin/app");
+
+const {
+  initializeApp,
+  cert,
+  getApps,
+} = require("firebase-admin/app");
+
 const { getAuth } = require("firebase-admin/auth");
 const { getFirestore } = require("firebase-admin/firestore");
+
 const { GoogleGenAI } = require("@google/genai");
 const { rateLimit } = require("express-rate-limit");
 
@@ -19,41 +26,44 @@ const PORT = process.env.PORT || 5000;
 // ==========================================
 
 if (!process.env.GEMINI_API_KEY) {
-  console.error("GEMINI_API_KEY belum diatur di file .env");
-  process.exit(1);
+  throw new Error("GEMINI_API_KEY belum dikonfigurasi.");
 }
 
-const serviceAccountPath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
+const serviceAccountJson =
+  process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
-if (!serviceAccountPath) {
-  console.error("FIREBASE_SERVICE_ACCOUNT_PATH belum diatur.");
-  process.exit(1);
-}
+const serviceAccountPath =
+  process.env.FIREBASE_SERVICE_ACCOUNT_PATH;
 
-const resolvedPath = path.resolve(serviceAccountPath);
+let serviceAccount;
 
-if (!fs.existsSync(resolvedPath)) {
-  console.error("File Firebase Service Account tidak ditemukan:", resolvedPath);
-  process.exit(1);
+if (serviceAccountJson) {
+  serviceAccount = JSON.parse(serviceAccountJson);
+} else if (
+  serviceAccountPath &&
+  fs.existsSync(path.resolve(serviceAccountPath))
+) {
+  serviceAccount = JSON.parse(
+    fs.readFileSync(path.resolve(serviceAccountPath), "utf8")
+  );
+} else {
+  throw new Error(
+    "Firebase Service Account belum dikonfigurasi."
+  );
 }
 
 // ==========================================
 // 2. FIREBASE ADMIN SDK
 // ==========================================
 
-try {
-  const serviceAccount = JSON.parse(
-    fs.readFileSync(resolvedPath, "utf8")
-  );
-
+if (getApps().length === 0) {
   initializeApp({
     credential: cert(serviceAccount),
   });
 
-  console.log("Firebase Admin SDK berhasil diinisialisasi.");
-} catch (error) {
-  console.error("Gagal menginisialisasi Firebase Admin SDK:", error.message);
-  process.exit(1);
+  console.log(
+    "Firebase Admin SDK berhasil diinisialisasi."
+  );
 }
 
 const auth = getAuth();
@@ -71,9 +81,28 @@ const ai = new GoogleGenAI({
 // 4. MIDDLEWARE
 // ==========================================
 
+// Mendukung beberapa origin, dipisahkan koma.
+// Contoh: http://localhost:5173,https://jobboard-ai.vercel.app
+
+const allowedOrigins = (
+  process.env.CLIENT_URL || "http://localhost:5173"
+)
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: process.env.CLIENT_URL || "http://localhost:5173",
+    origin: (origin, callback) => {
+      // Mengizinkan request tanpa Origin, misalnya health check.
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(
+        new Error("Origin tidak diizinkan oleh CORS.")
+      );
+    },
   })
 );
 
@@ -98,7 +127,8 @@ async function verifyFirebaseToken(req, res, next) {
 
   if (!authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
-      error: "Akses ditolak. Token autentikasi tidak ditemukan.",
+      error:
+        "Akses ditolak. Token autentikasi tidak ditemukan.",
     });
   }
 
@@ -123,7 +153,8 @@ async function verifyFirebaseToken(req, res, next) {
 
     if (userData.role !== "jobSeeker") {
       return res.status(403).json({
-        error: "Fitur AI ini hanya tersedia untuk pencari kerja.",
+        error:
+          "Fitur AI ini hanya tersedia untuk pencari kerja.",
       });
     }
 
@@ -131,10 +162,14 @@ async function verifyFirebaseToken(req, res, next) {
 
     next();
   } catch (error) {
-    console.error("Authentication error:", error.message);
+    console.error(
+      "Authentication error:",
+      error.message
+    );
 
     return res.status(401).json({
-      error: "Token tidak valid atau sudah kedaluwarsa. Silakan login kembali.",
+      error:
+        "Token tidak valid atau sudah kedaluwarsa. Silakan login kembali.",
     });
   }
 }
@@ -149,7 +184,6 @@ app.get("/", (req, res) => {
     firebase: "Connected",
   });
 });
-
 
 // ==========================================
 // 7. AI JOB ANALYSIS
@@ -247,7 +281,8 @@ app.post(
 
       if (requiredSkills.length === 0) {
         return res.status(400).json({
-          error: "Lowongan belum memiliki persyaratan skill.",
+          error:
+            "Lowongan belum memiliki persyaratan skill.",
         });
       }
 
@@ -277,7 +312,9 @@ app.post(
       );
 
       const matchScore = Math.round(
-        (matchedSkills.length / uniqueRequiredSkills.length) * 100
+        (matchedSkills.length /
+          uniqueRequiredSkills.length) *
+          100
       );
 
       // ======================================
@@ -341,7 +378,8 @@ ATURAN:
       // ======================================
 
       const response = await ai.models.generateContent({
-        model: process.env.GEMINI_MODEL || "gemini-2.5-flash",
+        model:
+          process.env.GEMINI_MODEL || "gemini-2.5-flash",
         contents: prompt,
       });
 
@@ -360,22 +398,33 @@ ATURAN:
         analysis:
           response.text || "AI tidak menghasilkan jawaban.",
       });
-
     } catch (error) {
-      console.error("Gemini AI Analysis Error:", error);
+      console.error(
+        "Gemini AI Analysis Error:",
+        error
+      );
 
       return res.status(500).json({
-        error: "Gagal melakukan analisis AI. Silakan coba lagi.",
+        error:
+          "Gagal melakukan analisis AI. Silakan coba lagi.",
       });
     }
   }
 );
 
-
 // ==========================================
-// 8. START SERVER
+// 8. START SERVER / VERCEL EXPORT
 // ==========================================
 
-app.listen(PORT, () => {
-  console.log(`JobBoard AI Backend berjalan di port ${PORT}`);
-});
+// Lokal: jalankan npm start
+// Vercel: gunakan app sebagai Serverless Function
+
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(
+      `JobBoard AI Backend berjalan di port ${PORT}`
+    );
+  });
+}
+
+module.exports = app;
