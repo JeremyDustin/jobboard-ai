@@ -205,7 +205,7 @@ export default function JobRecommendations({
 
       // Kirim permintaan ke backend
       const response = await fetch(
-        "http://localhost:5000/api/ai/analyze-job",
+        `${import.meta.env.VITE_API_URL || "http://localhost:5000"}/api/ai/analyze-job`,
         {
           method: "POST",
           headers: {
